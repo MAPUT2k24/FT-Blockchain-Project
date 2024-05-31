@@ -1,0 +1,233 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+/**
+ * @title DTEXAuction
+ * @dev Implements Dutch auctions for ERC-721 tokens and handles ERC-20 token interactions.
+ */
+contract DTEXAuction is ERC721URIStorage, Ownable {
+    using Counters for Counters.Counter;
+    using SafeERC20 for IERC20;
+    Counters.Counter private _tokenIds;
+
+    IERC20 public usdtToken;
+
+    struct Auction {
+        uint256 initialPrice;
+        uint256 minPrice;
+        uint256 duration;
+        uint256 startTime;
+        uint256 priceDropInterval;
+        uint256 priceDropAmount;
+        address highestBidder;
+        uint256 highestBid;
+        bool auctionEnded;
+        bool isDelivered;
+        bool isDisputed;
+    }
+
+    mapping(uint256 => Auction) public auctions;
+    mapping(uint256 => address) public tokenToSeller;
+
+    event AuctionStarted(uint256 tokenId, uint256 initialPrice, uint256 minPrice, uint256 duration, uint256 startTime);
+    event NewBid(uint256 tokenId, address indexed bidder, uint256 bidAmount);
+    event AuctionEnded(uint256 tokenId, address winner, uint256 winningBid);
+    event DeliveryConfirmed(uint256 tokenId, address indexed buyer);
+    event DisputeRaised(uint256 tokenId);
+    event DisputeResolved(uint256 tokenId, bool releaseToSeller);
+
+    constructor(address _usdtAddress) ERC721("DTEXPremiumTeaToken", "DPTT") {
+        usdtToken = IERC20(_usdtAddress);
+    }
+
+    /**
+     * @notice Mints a new token and starts a Dutch auction.
+     * @param tokenURI URI for the token metadata.
+     * @param initialPrice Starting price of the auction.
+     * @param minPrice Minimum price of the auction.
+     * @param duration Duration of the auction.
+     * @param priceDropInterval Interval for price drops.
+     */
+    function mintAndStartAuction(
+        string memory tokenURI,
+        uint256 initialPrice,
+        uint256 minPrice,
+        uint256 duration,
+        uint256 priceDropInterval
+    ) public onlyOwner {
+        _tokenIds.increment();
+        uint256 newTokenId = _tokenIds.current();
+        _mint(address(this), newTokenId);
+        _setTokenURI(newTokenId, tokenURI);
+
+        uint256 priceDropAmount = (initialPrice - minPrice) / (duration / priceDropInterval);
+        auctions[newTokenId] = Auction({
+            initialPrice: initialPrice,
+            minPrice: minPrice,
+            duration: duration,
+            startTime: block.timestamp,
+            priceDropInterval: priceDropInterval,
+            priceDropAmount: priceDropAmount,
+            highestBidder: address(0),
+            highestBid: 0,
+            auctionEnded: false,
+            isDelivered: false,
+            isDisputed: false
+        });
+
+        tokenToSeller[newTokenId] = msg.sender;
+
+        emit AuctionStarted(newTokenId, initialPrice, minPrice, duration, block.timestamp);
+    }
+
+    /**
+     * @notice Gets the current price of a token in auction.
+     * @param tokenId ID of the token.
+     * @return The current price.
+     */
+    function getCurrentPrice(uint256 tokenId) public view returns (uint256) {
+        Auction memory auction = auctions[tokenId];
+        uint256 elapsedIntervals = (block.timestamp - auction.startTime) / auction.priceDropInterval;
+        uint256 priceDrop = elapsedIntervals * auction.priceDropAmount;
+        return auction.initialPrice > priceDrop ? auction.initialPrice - priceDrop : auction.minPrice;
+    }
+
+    /**
+     * @notice Places a bid on a token using USDT.
+     * @param tokenId ID of the token.
+     * @param bidAmount The amount of USDT bid.
+     */
+    function placeBid(uint256 tokenId, uint256 bidAmount) public {
+        Auction storage auction = auctions[tokenId];
+        require(block.timestamp < auction.startTime + auction.duration, "Auction has ended");
+        require(bidAmount >= getCurrentPrice(tokenId), "Bid amount must be at least the current price");
+        require(!auction.auctionEnded, "Auction already ended");
+
+        if (auction.highestBidder != address(0)) {
+            usdtToken.safeTransfer(auction.highestBidder, auction.highestBid);
+        }
+
+        usdtToken.safeTransferFrom(msg.sender, address(this), bidAmount);
+        auction.highestBidder = msg.sender;
+        auction.highestBid = bidAmount;
+
+        emit NewBid(tokenId, msg.sender, bidAmount);
+    }
+
+    /**
+     * @notice Ends the auction for a token.
+     * @param tokenId ID of the token.
+     */
+    function endAuction(uint256 tokenId) public {
+        Auction storage auction = auctions[tokenId];
+        require(block.timestamp >= auction.startTime + auction.duration, "Auction is still ongoing");
+        require(!auction.auctionEnded, "Auction already ended");
+        auction.auctionEnded = true;
+
+        if (auction.highestBidder != address(0)) {
+            _transfer(address(this), auction.highestBidder, tokenId);
+        } else {
+            _transfer(address(this), tokenToSeller[tokenId], tokenId);
+        }
+
+        emit AuctionEnded(tokenId, auction.highestBidder, auction.highestBid);
+    }
+
+    /**
+     * @notice Confirms the delivery of a token.
+     * @param tokenId ID of the token.
+     */
+    function confirmDelivery(uint256 tokenId) public {
+        Auction storage auction = auctions[tokenId];
+        require(msg.sender == auction.highestBidder, "Only the highest bidder can confirm delivery");
+        auction.isDelivered = true;
+
+        emit DeliveryConfirmed(tokenId, msg.sender);
+    }
+
+    /**
+     * @notice Releases funds to the seller.
+     * @param tokenId ID of the token.
+     */
+    function releaseFunds(uint256 tokenId) public {
+        Auction storage auction = auctions[tokenId];
+        require(auction.isDelivered, "Delivery not confirmed");
+        require(!auction.isDisputed, "Dispute is active");
+        usdtToken.safeTransfer(tokenToSeller[tokenId], auction.highestBid);
+    }
+
+    /**
+     * @notice Raises a dispute for a token.
+     * @param tokenId ID of the token.
+     */
+    function raiseDispute(uint256 tokenId) public {
+        Auction storage auction = auctions[tokenId];
+        require(msg.sender == auction.highestBidder, "Only the highest bidder can raise a dispute");
+        auction.isDisputed = true;
+
+        emit DisputeRaised(tokenId);
+    }
+
+    /**
+     * @notice Resolves a dispute for a token.
+     * @param tokenId ID of the token.
+     * @param releaseToSeller Whether to release funds to the seller.
+     */
+    function resolveDispute(uint256 tokenId, bool releaseToSeller) public onlyOwner {
+        Auction storage auction = auctions[tokenId];
+        require(auction.isDisputed, "No active dispute");
+        if (releaseToSeller) {
+            usdtToken.safeTransfer(tokenToSeller[tokenId], auction.highestBid);
+        } else {
+            usdtToken.safeTransfer(auction.highestBidder, auction.highestBid);
+        }
+        auction.isDisputed = false;
+
+        emit DisputeResolved(tokenId, releaseToSeller);
+    }
+
+    /**
+     * @notice Refunds the highest bidder if the auction has ended without delivery.
+     * @param tokenId ID of the token.
+     */
+    function refund(uint256 tokenId) public {
+        Auction storage auction = auctions[tokenId];
+        require(block.timestamp > auction.startTime + auction.duration, "Deadline not reached");
+        require(!auction.isDelivered, "Product already delivered");
+        usdtToken.safeTransfer(auction.highestBidder, auction.highestBid);
+    }
+
+    /**
+     * @notice Transfers ERC-20 tokens from the caller to a specified address.
+     * @param token The address of the ERC-20 token contract.
+     * @param recipient The address to receive the tokens.
+     * @param amount The amount of tokens to transfer.
+     */
+    function transferERC20(address token, address recipient, uint256 amount) external {
+        require(token != address(0), "Invalid token address");
+        require(recipient != address(0), "Invalid recipient address");
+        require(amount > 0, "Amount must be greater than zero");
+
+        IERC20(token).safeTransferFrom(msg.sender, recipient, amount);
+    }
+
+    /**
+     * @notice Checks the ERC-20 token balance of a specified address.
+     * @param token The address of the ERC-20 token contract.
+     * @param account The address to check the balance of.
+     * @return The balance of the specified address.
+     */
+    function getERC20Balance(address token, address account) external view returns (uint256) {
+        require(token != address(0), "Invalid token address");
+        require(account != address(0), "Invalid account address");
+
+        return IERC20(token).balanceOf(account);
+    }
+}
