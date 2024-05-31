@@ -1,7 +1,9 @@
 # FT-Blockchain-Project
 # DTEXAuction
 
-DTEXAuction is a decentralized application (DApp) that implements Dutch auctions for ERC-721 tokens and handles ERC-20 token interactions. The smart contract allows users to mint NFTs (Non-Fungible Tokens), start auctions, place bids using USDT (ERC-20), and end auctions.
+DTEXAuction is a decentralized application (DApp) that implements Dutch auctions for ERC-721 tokens and handles ERC-20 token interactions for tea trading. The smart contract allows users to mint NFTs (Non-Fungible Tokens - ERC-721, for unique tea blends), start auctions, place bids using USDT (ERC-20), and end auctions.
+
+There is a Smart Contract written in Solidity and Proof of Concept written in HTML.
 
 ## Table of Contents
 
