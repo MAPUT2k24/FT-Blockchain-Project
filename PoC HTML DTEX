@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DTEXAuction</title>
+    <style>
+        .loading {
+            display: none;
+        }
+        .loading.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <h1>DTEXAuction</h1>
+    
+    <h2>Mint and Start Auction</h2>
+    <div>
+        <input type="text" id="tokenURI" placeholder="Token URI">
+        <input type="number" id="initialPrice" placeholder="Initial Price (USDT)">
+        <input type="number" id="minPrice" placeholder="Minimum Price (USDT)">
+        <input type="number" id="duration" placeholder="Duration (seconds)">
+        <input type="number" id="priceDropInterval" placeholder="Price Drop Interval (seconds)">
+        <button onclick="mintAndStartAuction()">Mint and Start Auction</button>
+    </div>
+    <div class="loading" id="mintingLoader">Minting and starting auction...</div>
+
+    <h2>Place a Bid</h2>
+    <div>
+        <input type="number" id="tokenIdBid" placeholder="Token ID">
+        <input type="number" id="bidAmount" placeholder="Bid Amount (USDT)">
+        <button onclick="placeBid()">Place Bid</button>
+    </div>
+    <div class="loading" id="biddingLoader">Placing bid...</div>
+
+    <h2>End Auction</h2>
+    <div>
+        <input type="number" id="tokenIdEnd" placeholder="Token ID">
+        <button onclick="endAuction()">End Auction</button>
+    </div>
+    <div class="loading" id="endingLoader">Ending auction...</div>
+
+    <script src="https://cdn.jsdelivr.net/gh/ethereum/web3.js@1.5.2/dist/web3.min.js"></script>
+    <script>
+        const contractAddress = ‘Our_Contract_Address';
+        const contractABI = [/* ABI here */];
+        const usdtAddress = 'USDT_Contract_Address';
+        const usdtABI = [/* USDT ABI here */];
+
+        const web3 = new Web3(Web3.givenProvider || 'http://localhost:8545');
+        const contract = new web3.eth.Contract(contractABI, contractAddress);
+        const usdtContract = new web3.eth.Contract(usdtABI, usdtAddress);
+
+        async function mintAndStartAuction() {
+            const accounts = await web3.eth.requestAccounts();
+            const tokenURI = document.getElementById('tokenURI').value;
+            const initialPrice = document.getElementById('initialPrice').value;
+            const minPrice = document.getElementById('minPrice').value;
+            const duration = document.getElementById('duration').value;
+            const priceDropInterval = document.getElementById('priceDropInterval').value;
+            
+            if (!tokenURI || initialPrice <= 0 || minPrice <= 0 || duration <= 0 || priceDropInterval <= 0) {
+                alert("Please fill out all fields correctly.");
+                return;
+            }
+
+            document.getElementById('mintingLoader').classList.add('show');
+
+            try {
+                await contract.methods.mintAndStartAuction(tokenURI, initialPrice, minPrice, duration, priceDropInterval).send({ from: accounts[0] });
+                alert("Auction started successfully!");
+            } catch (error) {
+                console.error(error);
+                alert("An error occurred while starting the auction.");
+            } finally {
+                document.getElementById('mintingLoader').classList.remove('show');
+            }
+        }
+
+        async function placeBid() {
+            const accounts = await web3.eth.requestAccounts();
+            const tokenId = document.getElementById('tokenIdBid').value;
+            const bidAmount = document.getElementById('bidAmount').value;
+
+            if (!tokenId || bidAmount <= 0) {
+                alert("Please fill out all fields correctly.");
+                return;
+            }
+
+            document.getElementById('biddingLoader').classList.add('show');
+
+            try {
+                await usdtContract.methods.approve(contractAddress, web3.utils.toWei(bidAmount, 'mwei')).send({ from: accounts[0] });
+                await contract.methods.placeBid(tokenId, web3.utils.toWei(bidAmount, 'mwei')).send({ from: accounts[0] });
+                alert("Bid placed successfully!");
+            } catch (error) {
+                console.error(error);
+                alert("An error occurred while placing the bid.");
+            } finally {
+                document.getElementById('biddingLoader').classList.remove('show');
+            }
+        }
+
+        async function endAuction() {
+            const accounts = await web3.eth.requestAccounts();
+            const tokenId = document.getElementById('tokenIdEnd').value;
+
+            if (!tokenId) {
+                alert("Please fill out all fields correctly.");
+                return;
+            }
+            document.getElementById('endingLoader').classList.add('show');
+            try {
+                await contract.methods.endAuction(tokenId).send({ from: accounts[0] });
+                alert("Auction ended successfully!");
+            } catch (error) {
+                console.error(error);
+                alert("An error occurred while ending the auction.");
+            } finally {
+                document.getElementById('endingLoader').classList.remove('show');
+            }
+        }
+        
+        window.addEventListener('load', async () => {
+            if (typeof web3 === 'undefined') {
+                alert('You forgot to install MetaMask');
+            }
+        });
+    </script>
+</body>
+</html>
